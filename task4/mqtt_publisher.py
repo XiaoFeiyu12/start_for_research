@@ -2,40 +2,130 @@
 MQTT 发布者（基于 TCP 服务端）
 功能：接收 TCP 客户端发送的数据，通过 MQTT 发布到 Broker
 
-数据流：TCP Client → 本程序 → MQTT Broker → mqtt_subscriber.py
+数据流：client.py → 本程序 → MQTT Broker → mqtt_subscriber.py
 """
 
 # 需要导入的库：socket, struct, sys, paho.mqtt.client
+import socket
+import struct
+import sys
+import paho.mqtt.client as mqtt
+from datetime import datetime
+from tools.logger import Logger
 
-# MQTT 配置（直接用这些常量）
 MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 MQTT_TOPIC = "tcp/data"
 
+
 # -----------------------------------------------------------------------
-# 提示：整体结构
+# 提示：用类封装
 #
-# main() 里做两件事：
-#   1. 创建 MQTT 客户端并连接 Broker，启动后台网络循环（loop_start）
-#   2. 创建 TCP 服务端 socket，循环接受客户端连接，接收数据后 publish 出去
+# 类名：MqttPublisher
 #
-# MQTT 客户端怎么创建：
-#   import paho.mqtt.client as mqtt
-#   client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-#   绑定两个回调再 connect：
-#     on_connect(client, userdata, flags, reason_code, properties)
-#       → reason_code == 0 表示连接成功，打印一下
-#     on_publish(client, userdata, mid, reason_code, properties)
-#       → 可以只打印"消息已发布"，也可以不绑定
-#   client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
-#   client.loop_start()   ← 后台线程，不阻塞主线程
+# __init__(self, tcp_host, tcp_port, mqtt_broker, mqtt_port, topic)
+#   - 保存所有参数到实例变量
+#   - 初始化 self.mqtt_client = None，self.server_socket = None
 #
-# TCP 服务端怎么写：
-#   参考 task3/server.py
-#   区别：不写数据库，改成 client.publish(MQTT_TOPIC, str(value), qos=1)
-#   外层 while True 循环持续接受新连接（支持多个客户端轮流连）
+# _on_connect(self, client, userdata, flags, reason_code, properties)
+#   - 绑定为实例方法，reason_code == 0 时打印连接成功
+#   - 回调绑定方式：self.mqtt_client.on_connect = self._on_connect
+#     （self 会自动传入，paho 不关心多出来的 self 参数）
 #
-# 收尾：
-#   try/except KeyboardInterrupt/finally
-#   finally 里：server_socket.close(), client.loop_stop(), client.disconnect()
+# _setup_mqtt(self)
+#   - 创建 mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+#   - 绑定 on_connect 回调
+#   - connect 后调用 loop_start()（后台线程，不阻塞 TCP 服务端循环）
+#
+# _setup_tcp(self)
+#   - 创建 TCP server socket，setsockopt SO_REUSEADDR，bind，listen
+#
+# run(self)
+#   - 调用 _setup_mqtt() 和 _setup_tcp()
+#   - 外层 while True：accept 新客户端连接
+#   - 内层 while True：recv(4)，unpack，publish(topic, str(value), qos=1)
+#   - try/except KeyboardInterrupt/finally，finally 里调用 close()
+#
+# close(self)
+#   - 关闭 server_socket
+#   - mqtt_client.loop_stop()，mqtt_client.disconnect()
+#
+# main() 函数：
+#   - 解析命令行参数（tcp host、tcp port）
+#   - 创建 MqttPublisher 实例，调用 run()
 # -----------------------------------------------------------------------
+class MqttPublisher:
+    def __init__(
+        self, broker, mqtt_port, topic, userdata, host, tcp_port, name="MqttPublisher"
+    ):
+        self.broker = broker
+        self.mqtt_port = mqtt_port
+        self.topic = topic
+        self.userdata = userdata
+        self.host = host
+        self.tcp_port = tcp_port
+
+        self.tcp_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.mqtt_publisher = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2, userdata=self.userdata
+        )
+        self.mqtt_publisher.on_connect = self.__on_connect__
+
+        self.logger = Logger(name=name)
+
+    def __on_connect__(self, client, userdata, flags, reason_code, properties):
+        if reason_code == 0:
+            self.logger.log_info("连接成功")
+            return True
+        else:
+            self.logger.log_info("连接失败")
+            return False
+
+    def __setup_tcp__(self):
+        self.tcp_server_socket.bind((self.host, self.tcp_port))
+        self.tcp_server_socket.listen()
+        
+    def __setup_mqtt__(self):
+        self.logger.log_info("正在连接中...")
+        self.mqtt_publisher.connect(host=self.broker, port=self.mqtt_port)
+        self.mqtt_publisher.loop_start()
+
+    def run(self):
+        self.__setup_mqtt__()
+        self.__setup_tcp__()
+
+        tcp_client_socket, tcp_client_addr = self.tcp_server_socket.accept()
+        while True:
+            data = tcp_client_socket.recv(4)
+            if not data:
+                self.logger.log_info("未接受到数据，客户端连接已断开")
+                break
+            num = struct.unpack(">i", data)[0]
+            client_addr_str = f"{tcp_client_addr[0]}:{tcp_client_addr[1]}"
+            self.logger.log_info(f"接收数据: {num} | 来自: {client_addr_str}")
+            self.mqtt_publisher.publish(self.topic,str(num),qos=1)
+
+    def close(self):
+        self.tcp_server_socket.close()
+        self.mqtt_publisher.loop_stop()
+        self.mqtt_publisher.disconnect()
+        self.logger.log_info(f"所有连接已关闭")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("使用方法: python mqtt_publisher.py <服务端IP> <端口>")
+        sys.exit(1)
+
+    host = sys.argv[1]
+    port = int(sys.argv[2])
+
+    mqtt_publisher = MqttPublisher(MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, None, host, port)
+    try:
+        mqtt_publisher.run()
+    except KeyboardInterrupt:
+        print(f"\n:客户端停止")
+    except Exception as e:
+        print(f"错误: {e}")
+    finally:
+        mqtt_publisher.close()

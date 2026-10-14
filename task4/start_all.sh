@@ -27,6 +27,14 @@ echo "=== Task4 启动 ==="
 #   启动后 sleep 5，等 Broker 就绪，否则客户端连接会失败
 #
 # TODO: 你的代码
+if ! docker ps --format '{{.Names}}' | grep -q '^emqx$';
+then 
+    docker run -d --name emqx \
+  -p 1883:1883 -p 8083:8083 -p 8084:8084 \
+  -p 8883:8883 -p 18083:18083 \
+  emqx/emqx-enterprise:latest
+    fi
+sleep 5
 # -----------------------------------------------------------------------
 
 echo "[1/3] 检查/启动 EMQX..."
@@ -47,6 +55,9 @@ echo "[1/3] 检查/启动 EMQX..."
 #   PID 文件：  "$LOG_DIR/subscriber.pid"
 #
 # TODO: 你的代码
+nohup python3 "$SCRIPT_DIR/mqtt_subscriber.py" "$SCRIPT_DIR/received_data.txt" > "$LOG_DIR/subscriber.log" 2>&1 &
+echo $! > "$LOG_DIR/subscriber.pid"
+sleep 1
 # -----------------------------------------------------------------------
 
 echo "[2/3] 启动 MQTT 订阅者..."
@@ -59,6 +70,8 @@ echo "[2/3] 启动 MQTT 订阅者..."
 #   PID 文件：  "$LOG_DIR/publisher.pid"
 #
 # TODO: 你的代码
+nohup python3 "$SCRIPT_DIR/mqtt_publisher.py" 127.0.0.1 8080 > "$LOG_DIR/publisher.log" 2>&1 &
+echo $! > "$LOG_DIR/publisher.pid"
 # -----------------------------------------------------------------------
 
 echo "[3/3] 启动 MQTT 发布者（TCP 服务端）..."
@@ -71,8 +84,4 @@ echo "EMQX 控制台:    http://localhost:18083  (账号 admin / 密码 public)"
 echo "数据输出文件:   $SCRIPT_DIR/received_data.txt"
 echo ""
 echo "发送测试数据（另开终端）："
-echo "  python3 ../task3/client.py 127.0.0.1 8080"
-echo ""
-echo "查看日志："
-echo "  tail -f $LOG_DIR/publisher.log"
-echo "  tail -f $LOG_DIR/subscriber.log"
+echo "python3 tcp_client.py 127.0.0.1 8080"

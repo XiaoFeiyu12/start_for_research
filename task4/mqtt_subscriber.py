@@ -6,44 +6,102 @@ MQTT 订阅者
 """
 
 # 需要导入的库：sys, paho.mqtt.client, datetime
+import sys
+import paho.mqtt.client as mqtt
+import datetime
+from tools.logger import Logger
 
-# MQTT 配置
 MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 MQTT_TOPIC = "tcp/data"
 OUTPUT_FILE = "received_data.txt"
 
 # -----------------------------------------------------------------------
-# 提示：整体结构
+# 提示：用类封装
 #
-# 需要定义两个回调函数，然后在 main() 里把它们绑定到 client 上：
+# 类名：MqttSubscriber
 #
-# 回调 1：on_connect
-#   触发时机：client.connect() 成功或失败后自动调用
-#   参数：(client, userdata, flags, reason_code, properties)
-#   要做的事：
-#     - reason_code == 0 表示连接成功，打印一下
-#     - 在这里调用 client.subscribe(MQTT_TOPIC, qos=1) 订阅主题
-#       （放这里的原因：断线重连后 on_connect 会再次触发，自动重新订阅）
+# __init__(self, broker, port, topic, output_file)
+#   - 保存所有参数到实例变量
+#   - 初始化 self.client = None
 #
-# 回调 2：on_message
-#   触发时机：每收到一条消息自动调用
-#   参数：(client, userdata, msg)
-#     - msg.payload 是 bytes，用 .decode("utf-8") 转为字符串
-#     - userdata 是创建 client 时传入的自定义数据（文件路径）
-#   要做的事：
-#     - 获取当前时间戳（毫秒精度）：
-#       datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-#       （[:-3] 把微秒6位截短为毫秒3位）
-#     - 拼成一行："{timestamp},{value}\n"
-#     - 以追加模式写入文件：open(文件路径, "a", encoding="utf-8")
-#     - 打印收到的数据
+# _on_connect(self, client, userdata, flags, reason_code, properties)
+#   - reason_code == 0 时打印连接成功
+#   - 在这里调用 client.subscribe(self.topic, qos=1)
+#     （放这里是因为断线重连后会再次触发，自动重新订阅）
 #
-# main() 要做的事：
-#   - 支持命令行参数指定输出文件：sys.argv[1] if len(sys.argv) > 1 else OUTPUT_FILE
-#   - 创建 client，通过 userdata 把文件路径传给回调（避免全局变量）：
-#     mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, userdata={"output_file": 文件路径})
-#   - 绑定两个回调函数
+# _on_message(self, client, userdata, msg)
+#   - msg.payload.decode("utf-8") 得到数据字符串
+#   - datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] 得到毫秒时间戳
+#   - 拼成 "{timestamp},{value}\n" 追加写入 self.output_file
+#   - 打印收到的数据
+#
+# start(self)
+#   - 创建 mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+#   - 绑定 self._on_connect 和 self._on_message
+#     （不需要 userdata 了，直接用 self.output_file）
 #   - connect 后调用 loop_forever()（阻塞，持续等消息）
-#   - try/except KeyboardInterrupt/finally，finally 里 disconnect()
+#
+# stop(self)
+#   - client.disconnect()
+#
+# main() 函数：
+#   - 支持命令行参数指定输出文件：sys.argv[1] if len(sys.argv) > 1 else OUTPUT_FILE
+#   - 创建 MqttSubscriber 实例，调用 start()
+#   - try/except KeyboardInterrupt/finally，finally 里调用 stop()
 # -----------------------------------------------------------------------
+class MqttSubscription:
+    def __init__(self,broker,port,topic,userdata,name="MqttSubscription"):
+        self.broker = broker
+        self.port = port
+        self.topic = topic
+        self.userdata = userdata
+        self.client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2,
+            userdata=self.userdata)
+        self.logger = Logger(name=name)
+
+        self.client.on_connect = self.__on_connect__
+        self.client.on_message = self.__on_message__
+
+    def __on_connect__(self,client,userdata,flags,reason_code,properties):
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        if(reason_code == 0):
+            self.logger.log_info("连接成功")
+            client.subscribe(self.topic,qos=1)
+            return True
+        else:
+            self.logger.log_warn("连接失败")
+            return False
+
+    def __on_message__(self,client,userdata,msg):
+        data=msg.payload.decode("utf-8")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        with open(userdata["output_file"],"a",encoding="utf-8",newline="") as f:
+            f.write(f"[{timestamp}]:{data}\n")
+        self.logger.log_debug(f"收到数据{data}")
+
+    def start(self):
+        self.logger.log_info("正在连接中...")
+        self.client.connect(
+            host=self.broker,
+            port=self.port
+        )
+        self.client.loop_forever()
+
+    def stop(self):
+        self.logger.log_info("已关闭")
+        self.client.disconnect()
+
+if __name__ == "__main__":
+    try:
+        output_file = sys.argv[1] if len(sys.argv)>1 else OUTPUT_FILE
+        userdata = {"output_file":output_file}
+        subscription = MqttSubscription(MQTT_BROKER,MQTT_PORT,MQTT_TOPIC,userdata)
+        subscription.start()
+    except KeyboardInterrupt:
+        print("用户Ctrl+C打断进程")
+    except Exception as e:
+        print(f"发生错误：{e}")
+    finally:
+        subscription.stop()
