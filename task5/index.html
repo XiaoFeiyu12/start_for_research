@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>数据查询</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #1e1e1e; color: #d4d4d4; padding: 24px; }
+    h1 { font-size: 18px; margin-bottom: 20px; color: #9cdcfe; }
+
+    .form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 20px; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    label { font-size: 12px; color: #858585; }
+    input { background: #2d2d2d; border: 1px solid #3e3e3e; color: #d4d4d4;
+            padding: 6px 10px; font-family: monospace; font-size: 13px; width: 220px; }
+    input:focus { outline: none; border-color: #9cdcfe; }
+    button { background: #0e639c; color: #fff; border: none; padding: 7px 18px;
+             font-family: monospace; font-size: 13px; cursor: pointer; }
+    button:hover { background: #1177bb; }
+
+    #status { font-size: 12px; color: #858585; margin-bottom: 12px; min-height: 16px; }
+    #status.error { color: #f44747; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { background: #252526; color: #9cdcfe; text-align: left;
+         padding: 8px 12px; border-bottom: 1px solid #3e3e3e; }
+    td { padding: 7px 12px; border-bottom: 1px solid #2a2a2a; }
+    tr:hover td { background: #2a2d2e; }
+    .empty { text-align: center; color: #858585; padding: 40px; }
+  </style>
+</head>
+<body>
+  <h1>TCP 数据查询</h1>
+
+  <div class="form">
+    <div class="field">
+      <label>开始时间</label>
+      <input type="datetime-local" id="start" step="1">
+    </div>
+    <div class="field">
+      <label>结束时间</label>
+      <input type="datetime-local" id="end" step="1">
+    </div>
+    <button onclick="query()">查询</button>
+    <button onclick="queryToday()">今天</button>
+  </div>
+
+  <div id="status"></div>
+
+  <table id="table">
+    <thead>
+      <tr><th>ID</th><th>时间戳</th><th>数值</th><th>客户端</th></tr>
+    </thead>
+    <tbody id="tbody">
+      <tr><td colspan="4" class="empty">输入时间范围后点击查询</td></tr>
+    </tbody>
+  </table>
+
+  <script>
+    function toLocalInput(date) {
+      const pad = n => String(n).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    }
+
+    function queryToday() {
+      const now = new Date();
+      const start = new Date(now); start.setHours(0,0,0,0);
+      document.getElementById('start').value = toLocalInput(start);
+      document.getElementById('end').value = toLocalInput(now);
+      query();
+    }
+
+    async function query() {
+      const startVal = document.getElementById('start').value.replace('T', ' ');
+      const endVal   = document.getElementById('end').value.replace('T', ' ');
+      const status   = document.getElementById('status');
+      const tbody    = document.getElementById('tbody');
+
+      if (!startVal || !endVal) {
+        status.className = 'error';
+        status.textContent = '请填写开始和结束时间';
+        return;
+      }
+
+      status.className = '';
+      status.textContent = '查询中...';
+      tbody.innerHTML = '';
+
+      try {
+        const url = `/api/data?start=${encodeURIComponent(startVal)}&end=${encodeURIComponent(endVal)}`;
+        const res  = await fetch(url);
+        const json = await res.json();
+        const body = Array.isArray(json) ? json[0] : json;
+
+        if (body.code !== 0) {
+          status.className = 'error';
+          status.textContent = `错误: ${body.message}`;
+          tbody.innerHTML = `<tr><td colspan="4" class="empty">${body.message}</td></tr>`;
+          return;
+        }
+
+        const rows = body.data;
+        status.textContent = `共 ${body.count} 条记录`;
+
+        if (!rows || rows.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="4" class="empty">该时间段内无数据</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = rows.map(r => `
+          <tr>
+            <td>${r.id}</td>
+            <td>${r.timestamp}</td>
+            <td>${r.value}</td>
+            <td>${r.client}</td>
+          </tr>`).join('');
+
+      } catch (e) {
+        status.className = 'error';
+        status.textContent = `请求失败: ${e.message}`;
+      }
+    }
+  </script>
+</body>
+</html>
