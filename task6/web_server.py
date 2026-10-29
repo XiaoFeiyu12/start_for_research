@@ -44,12 +44,6 @@ logger = Logger("WebServer", "logs/web_server.log")
 app = Flask(__name__)
 db = Database(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME)
 
-
-@app.route("/")
-def index():
-    return send_from_directory(".", "index.html")
-
-
 @app.route("/api/data", methods=["GET"])
 def get_data():
     try:

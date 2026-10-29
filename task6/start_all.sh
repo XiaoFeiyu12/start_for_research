@@ -24,10 +24,13 @@ PUBLISHER_PID=$!
 python3 -u $SCRIPT_DIR/web_server.py &
 WEB_SERVER_PID=$!
 
+streamlit run $SCRIPT_DIR/app.py &
+
 sleep 1
 
 python3 -u $SCRIPT_DIR/tcp_client.py 127.0.0.1 8080 &
 CLIENT_PID=$!
+
 
 trap "kill $SUBSCRIBER_PID $PUBLISHER_PID $WEB_SERVER_PID $CLIENT_PID 2>/dev/null; exit" INT
 wait
